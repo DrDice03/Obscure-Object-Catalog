@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Target Log</title>
+<style>
+:root{
+  --bg:#1e1e1e; --panel:#2b2b2b; --panel2:#333; --text:#eee; --muted:#aaa;
+  --accent:#9ecbff; --danger:#7a2e2e; --danger2:#9b3b3b; --border:#444;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--text);overscroll-behavior:none}
+header{background:linear-gradient(180deg,#303030,#242424);padding:16px 18px;font-size:26px;font-weight:700;letter-spacing:.3px;box-shadow:0 2px 12px rgba(0,0,0,.35)}
+#app{padding:16px;max-width:900px;margin:auto}
+h2,h3{margin:10px 0 12px}
+.card{background:var(--panel);padding:13px;border-radius:12px;margin:10px 0;border:1px solid var(--border);box-shadow:0 8px 22px rgba(0,0,0,.15)}
+.category-row{display:flex;align-items:center;justify-content:space-between;gap:12px;position:relative;transition:transform .12s ease, opacity .12s ease}
+.category-row.dragging{opacity:.78;box-shadow:0 16px 34px rgba(0,0,0,.45);border:1px solid var(--accent);z-index:1000}
+.drag-handle{cursor:grab;color:#aaa;font-size:22px;line-height:1;padding:10px 8px;user-select:none;touch-action:none}
+.drag-handle:active{cursor:grabbing}
+.category-name{font-size:18px;font-weight:700;text-decoration:none;color:var(--accent);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.actions{display:flex;gap:6px;align-items:center;flex-shrink:0;position:relative}
+.menu-wrap{position:relative}
+.menu-button{background:#444;font-size:22px;line-height:1;padding:5px 10px;margin:0}
+.menu{display:none;position:absolute;right:0;top:36px;background:#333;border:1px solid #555;border-radius:10px;padding:8px;min-width:145px;z-index:2000;box-shadow:0 10px 24px rgba(0,0,0,.45)}
+.menu.open{display:block}
+.menu button{width:100%;text-align:left;margin:3px 0}
+button{background:#555;color:#fff;border:0;padding:8px 12px;border-radius:8px;margin:3px;cursor:pointer}
+button:hover{filter:brightness(1.1)}
+button.small{font-size:12px;padding:7px 9px;margin:0}
+button.danger{background:var(--danger)}
+button.danger:hover{background:var(--danger2)}
+button.restore{background:#3d6750}
+button.secondary{background:#444}
+input,textarea{width:100%;background:var(--panel2);color:#fff;border:1px solid #555;padding:10px;margin:7px 0;border-radius:8px}
+textarea{min-height:130px;resize:vertical}
+img{max-width:100%;max-height:320px;border-radius:10px;margin-top:10px;border:1px solid #444}
+a{color:var(--accent)}
+.warning{color:#ffb3b3;font-size:14px}
+.muted{color:var(--muted);font-size:13px}
+.toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:8px 0 14px}
+.badge{display:inline-block;background:#444;color:#ddd;border-radius:999px;padding:3px 9px;font-size:12px;margin-left:8px}
+.empty{color:#bbb;border:1px dashed #555;border-radius:12px;padding:16px;text-align:center;background:#242424}
+.organize-note{font-size:13px;color:#bbb;margin-top:-6px;margin-bottom:10px}
+.placeholder{height:58px;border:1px dashed var(--accent);border-radius:12px;margin:10px 0;background:#25313a}
+@media(max-width:560px){
+  .category-row{gap:8px}
+  .category-name{font-size:16px}
+}
+</style>
+</head>
+<body>
+<header>Target Log</header>
+<div id="app"></div>
+
+<script>
+let db = JSON.parse(localStorage.getItem("targetlog") || '{"Galaxies":[],"Nebulae":[],"Open Clusters":[],"Globular Clusters":[]}');
+let trash = JSON.parse(localStorage.getItem("targetlogTrash") || "[]");
+let categoryOrder = JSON.parse(localStorage.getItem("targetlogCategoryOrder") || "[]");
+const app=document.getElementById("app");
+
+function normalizeOrder(){
+  let existing=Object.keys(db);
+  categoryOrder = categoryOrder.filter(c=>existing.includes(c));
+  existing.forEach(c=>{ if(!categoryOrder.includes(c)) categoryOrder.push(c); });
+}
+normalizeOrder();
+
+const save=()=>{
+  normalizeOrder();
+  localStorage.setItem("targetlog",JSON.stringify(db));
+  localStorage.setItem("targetlogTrash",JSON.stringify(trash));
+  localStorage.setItem("targetlogCategoryOrder",JSON.stringify(categoryOrder));
+};
+
+function esc(s){
+  return String(s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
+}
+function jsesc(s){
+  return String(s ?? "").replaceAll("\\","\\\\").replaceAll("'","\\'").replaceAll("\n","\\n").replaceAll("\r","");
+}
+
+function naturalCompare(a,b){
+  return String(a ?? "").localeCompare(String(b ?? ""), undefined, {numeric:true, sensitivity:"base"});
+}
+function sortObjects(arr){
+  return arr.sort((a,b)=>naturalCompare(a.name,b.name));
+}
+
+function uniqueName(base){
+  let name=base, i=2;
+  while(db[name]){name = base + " restored " + i; i++;}
+  return name;
+}
+function trashCount(){ return trash.length ? `<span class="badge">${trash.length}</span>` : ""; }
+function orderedCats(){ normalizeOrder(); return [...categoryOrder]; }
+
+function home(){
+  let cats=orderedCats();
+  app.innerHTML=`
+  <div class="toolbar">
+    <h2>Categories</h2>
+    <div>
+      <button class="secondary" onclick="sortCategoriesAZ()">Sort A-Z</button>
+      <button class="secondary" onclick="recycleBin()">Recycle Bin ${trashCount()}</button>
+    </div>
+  </div>
+  <div class="organize-note">Press and drag the ☰ handle to organize categories.</div>
+  <div id="catList">`+
+  (cats.length ? cats.map((c,idx)=>`
+    <div class="card category-row" data-cat="${esc(c)}">
+      <span class="drag-handle" title="Drag to reorder" onpointerdown="startReorder(event,'${jsesc(c)}')">☰</span>
+      <a class="category-name" href="#" onclick="cat('${jsesc(c)}')">${esc(c)}</a>
+      <div class="actions">
+        <div class="menu-wrap">
+          <button class="menu-button" onclick="toggleMenu(event,${idx})">⋮</button>
+          <div class="menu" id="menu-${idx}">
+            <button class="small secondary" onclick="ren('${jsesc(c)}')">Rename</button>
+            <button class="small danger" onclick="confirmDelete('${jsesc(c)}')">Move to Recycle Bin</button>
+          </div>
+        </div>
+      </div>
+    </div>`).join("") : `<div class="empty">No categories yet. Add one below.</div>`) +
+  `</div><div class="card"><h3>Add Category</h3><input id="nc" placeholder="Category name"><button onclick="addc()">Add</button></div>`;
+}
+
+function toggleMenu(e,idx){
+  e.stopPropagation();
+  document.querySelectorAll(".menu").forEach(m=>{ if(m.id!=="menu-"+idx)m.classList.remove("open"); });
+  document.getElementById("menu-"+idx).classList.toggle("open");
+}
+document.addEventListener("click",()=>document.querySelectorAll(".menu").forEach(m=>m.classList.remove("open")));
+
+function sortCategoriesAZ(){
+  categoryOrder = Object.keys(db).sort((a,b)=>a.localeCompare(b));
+  save();
+  home();
+}
+
+let dragState=null;
+function startReorder(e,catName){
+  e.preventDefault();
+  e.stopPropagation();
+  normalizeOrder();
+
+  const row=e.currentTarget.closest(".category-row");
+  const list=document.getElementById("catList");
+  const rect=row.getBoundingClientRect();
+
+  const placeholder=document.createElement("div");
+  placeholder.className="placeholder";
+  placeholder.style.height=rect.height+"px";
+
+  row.parentNode.insertBefore(placeholder,row.nextSibling);
+  row.classList.add("dragging");
+  row.style.position="fixed";
+  row.style.left=rect.left+"px";
+  row.style.top=rect.top+"px";
+  row.style.width=rect.width+"px";
+  row.style.margin="0";
+  row.style.pointerEvents="none";
+
+  dragState={
+    catName,row,list,placeholder,
+    offsetY:e.clientY-rect.top,
+    pointerId:e.pointerId
+  };
+
+  e.currentTarget.setPointerCapture(e.pointerId);
+  document.addEventListener("pointermove",moveReorder);
+  document.addEventListener("pointerup",endReorder);
+}
+function moveReorder(e){
+  if(!dragState)return;
+  e.preventDefault();
+
+  const y=e.clientY-dragState.offsetY;
+  dragState.row.style.top=y+"px";
+
+  const rows=[...dragState.list.querySelectorAll(".category-row:not(.dragging)")];
+  let inserted=false;
+
+  for(const r of rows){
+    const box=r.getBoundingClientRect();
+    const midpoint=box.top+box.height/2;
+    if(e.clientY<midpoint){
+      dragState.list.insertBefore(dragState.placeholder,r);
+      inserted=true;
+      break;
+    }
+  }
+  if(!inserted) dragState.list.appendChild(dragState.placeholder);
+}
+function endReorder(e){
+  if(!dragState)return;
+
+  const {row,list,placeholder}=dragState;
+  row.classList.remove("dragging");
+  row.style.position="";
+  row.style.left="";
+  row.style.top="";
+  row.style.width="";
+  row.style.margin="";
+  row.style.pointerEvents="";
+
+  list.insertBefore(row,placeholder);
+  placeholder.remove();
+
+  categoryOrder=[...list.querySelectorAll(".category-row")].map(r=>r.dataset.cat);
+  save();
+
+  document.removeEventListener("pointermove",moveReorder);
+  document.removeEventListener("pointerup",endReorder);
+  dragState=null;
+  home();
+}
+
+function addc(){
+  let n=document.getElementById("nc").value.trim();
+  if(n && !db[n]){
+    db[n]=[];
+    categoryOrder.push(n);
+    save();
+    home();
+  }
+}
+function ren(c){
+  let n=prompt("Rename category",c);
+  if(n && n.trim() && n!==c && !db[n.trim()]){
+    let newName=n.trim();
+    db[newName]=db[c];
+    delete db[c];
+    let idx=categoryOrder.indexOf(c);
+    if(idx>=0) categoryOrder[idx]=newName;
+    save();
+    home();
+  } else if(n && db[n.trim()]) {
+    alert("A category with that name already exists.");
+  }
+}
+
+function confirmDelete(c){
+  let count=db[c]?.length||0;
+  app.innerHTML=`<button onclick="home()">Cancel</button>
+  <div class="card">
+    <h2>Move to Recycle Bin?</h2>
+    <p class="warning">The category <b>${esc(c)}</b> and all ${count} object(s) inside it will be moved to the Recycle Bin.</p>
+    <p>You can restore it later from the Recycle Bin, or permanently delete it there.</p>
+    <button class="danger" onclick="moveToTrash('${jsesc(c)}')">Move to Recycle Bin</button>
+  </div>`;
+}
+function moveToTrash(c){
+  trash.push({name:c,objects:db[c],deletedAt:new Date().toISOString()});
+  delete db[c];
+  categoryOrder=categoryOrder.filter(x=>x!==c);
+  save();
+  home();
+}
+
+function recycleBin(){
+  trash.sort((a,b)=>new Date(b.deletedAt)-new Date(a.deletedAt));
+  app.innerHTML=`<button onclick="home()">Home</button>
+  <div class="toolbar">
+    <h2>Recycle Bin ${trashCount()}</h2>
+    ${trash.length ? `<button class="danger" onclick="emptyTrash()">Empty Recycle Bin</button>` : ""}
+  </div>
+  ${trash.length ? trash.map((t,i)=>`
+    <div class="card category-row">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700">${esc(t.name)}</div>
+        <div class="muted">${(t.objects||[]).length} object(s) • Deleted ${new Date(t.deletedAt).toLocaleString()}</div>
+      </div>
+      <div class="actions">
+        <button class="small restore" onclick="restoreTrash(${i})">Restore</button>
+        <button class="small danger" onclick="deleteTrash(${i})">Delete Forever</button>
+      </div>
+    </div>`).join("") : `<div class="empty">Recycle Bin is empty.</div>`}`;
+}
+function restoreTrash(i){
+  let item=trash[i];
+  let restoredName=uniqueName(item.name);
+  db[restoredName]=item.objects || [];
+  categoryOrder.push(restoredName);
+  trash.splice(i,1);
+  save();
+  home();
+}
+function deleteTrash(i){
+  let item=trash[i];
+  if(confirm("Permanently delete '"+item.name+"' from the Recycle Bin? This cannot be undone.")){
+    trash.splice(i,1);
+    save();
+    recycleBin();
+  }
+}
+function emptyTrash(){
+  if(confirm("Permanently delete everything in the Recycle Bin? This cannot be undone.")){
+    trash=[];
+    save();
+    recycleBin();
+  }
+}
+
+function cat(c){
+  let arr=sortObjects(db[c]);
+  app.innerHTML=`<button onclick="home()">Home</button><h2>${esc(c)}</h2>`+
+  (arr.length ? arr.map((o,i)=>`<div class="card"><a href="#" onclick="obj('${jsesc(c)}',${i})">${esc(o.name)}</a></div>`).join("") : `<div class="empty">No objects in this category yet.</div>`) +
+  `<div class="card"><h3>Add Object</h3><input id="n" placeholder="Name"><textarea id="d" placeholder="Description"></textarea><input id="f" type="file" accept="image/*"><button onclick="addo('${jsesc(c)}')">Save</button></div>`;
+}
+function addo(c){
+  let name=document.getElementById("n").value.trim();
+  let desc=document.getElementById("d").value;
+  let file=document.getElementById("f").files[0];
+  let finish=p=>{
+    if(name){db[c].push({name:name,desc:desc,photo:p||""});save();}
+    cat(c);
+  };
+  if(file){
+    let r=new FileReader();
+    r.onload=e=>finish(e.target.result);
+    r.readAsDataURL(file);
+  } else finish("");
+}
+function obj(c,i){
+  let arr=sortObjects(db[c]);
+  let o=arr[i];
+  app.innerHTML=`<button onclick="cat('${jsesc(c)}')">Back</button>
+  <div class="card">
+    <h2>${esc(o.name)}</h2>
+    <label class="muted">Description</label>
+    <textarea id="descBox">${esc(o.desc||"")}</textarea>
+    <button onclick="saveDesc('${jsesc(c)}',${i})">Save Description</button>
+    ${o.photo?'<img src="'+o.photo+'">':"<p class='muted'>No photo uploaded yet.</p>"}
+    <input type="file" id="pf" accept="image/*">
+    <button onclick="chg('${jsesc(c)}',${i})">Replace/Add Photo</button>
+  </div>`;
+}
+function saveDesc(c,i){
+  let arr=sortObjects(db[c]);
+  arr[i].desc=document.getElementById("descBox").value;
+  save();
+  alert("Description saved.");
+}
+function chg(c,i){
+  let file=document.getElementById("pf").files[0];
+  if(!file)return;
+  let arr=sortObjects(db[c]);
+  let o=arr[i];
+  let r=new FileReader();
+  r.onload=e=>{o.photo=e.target.result;save();obj(c,i);};
+  r.readAsDataURL(file);
+}
+home();
+</script>
+</body>
+</html>
