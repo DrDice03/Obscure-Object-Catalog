@@ -1,4 +1,4 @@
-const CACHE_NAME = "target-log-v1";
+const CACHE_NAME = "Obscure-Object-Catalog";
 const FILES = [
   "./",
   "./index.html",
